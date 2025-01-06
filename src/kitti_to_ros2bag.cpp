@@ -41,6 +41,8 @@ Kitti2BagNode::Kitti2BagNode()
   writer_->open(output_bag_name);
 
   timer_ = create_wall_timer(100ms, std::bind(&Kitti2BagNode::on_timer_callback, this));
+  max_index_ = std::min(max_index_, ground_truth_poses_.size());
+  RCLCPP_INFO(this->get_logger(), "Max index = %ld", max_index_);
 }
 
 void Kitti2BagNode::on_timer_callback()
@@ -595,6 +597,8 @@ nav_msgs::msg::Path Kitti2BagNode::convert_ground_truth_to_path_msg(
   tf2::Quaternion velo_quaternion = imu_to_velo_transform_.getRotation() * (velo_to_cam_transform_.getRotation() * cam_quaternion);
   tf2::Vector3 cam_position(ground_truth_pose[3], ground_truth_pose[7], ground_truth_pose[11]);
   tf2::Vector3 velo_position = imu_to_velo_transform_ * (velo_to_cam_transform_ * cam_position);
+  static tf2::Vector3 initial_pose(velo_position[0], velo_position[1], velo_position[2]);
+  velo_position = velo_position - initial_pose;
   pose.pose.position.x = velo_position.x();
   pose.pose.position.y = velo_position.y();
   pose.pose.position.z = velo_position.z();
