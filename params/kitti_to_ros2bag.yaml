@@ -1,5 +1,6 @@
 kitti_to_ros2bag_node:
   ros__parameters:
+    use_ground_truth: true
     kitti_path: "/data/kitti/raw/2011_09_29"
     data_folder: "2011_09_29_drive_0071_sync"
     # this folder shall have image_00, image_01, image_02, image_03, oxts, and velodyne_points

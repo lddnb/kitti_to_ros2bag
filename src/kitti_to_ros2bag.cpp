@@ -15,7 +15,7 @@
 // ROS header
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <cv_bridge/cv_bridge.h>
+#include <cv_bridge/cv_bridge.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
 // local header
@@ -31,6 +31,7 @@ Kitti2BagNode::Kitti2BagNode()
   data_folder_ = declare_parameter("data_folder", std::string());
   calib_folder_ = declare_parameter("calib_folder", std::string());
   dirs_ = declare_parameter("dirs", std::vector<std::string>());
+  use_ground_truth_ = declare_parameter("use_ground_truth", false);
   std::string output_bag_name = data_folder_ + "_bag";
 
   get_filenames();
@@ -105,6 +106,9 @@ void Kitti2BagNode::on_timer_callback()
     } else if (dir == "velodyne_points") {
       auto msg = convert_velo_to_msg(filename, timestamp);
       writer_->write(msg, "kitti/velo", timestamp);
+    } else if (use_ground_truth_) {
+      auto msg = convert_ground_truth_to_path_msg(ground_truth_poses_[index_], timestamp);
+      writer_->write(msg, "kitti/ground_truth", timestamp);
     }
   }
 
@@ -159,6 +163,26 @@ void Kitti2BagNode::get_filenames()
     }
   }
   max_index_ = filenames_[0].size();
+
+  if (use_ground_truth_) {
+    fs::path ground_truth_file = kitti_path_ / data_folder_ / "ground_truth.txt";
+    if (!fs::exists(ground_truth_file)) {
+      RCLCPP_ERROR(get_logger(), "Ground truth file not found");
+      return;
+    }
+    std::ifstream input_file(ground_truth_file);
+    std::string line;
+    while (std::getline(input_file, line)) {
+      std::vector<double> current_pose;
+      std::istringstream iss(line);
+      for (int i = 0; i < 12; ++i) {
+        double value;
+        iss >> value;
+        current_pose.push_back(value);
+      }
+      ground_truth_poses_.push_back(current_pose);
+    }
+  }
 }
 
 void Kitti2BagNode::get_all_timestamps()
@@ -442,3 +466,34 @@ sensor_msgs::msg::CameraInfo Kitti2BagNode::convert_calib_to_msg(
 
   return calib_msg;
 }
+
+nav_msgs::msg::Path Kitti2BagNode::convert_ground_truth_to_path_msg(
+  const std::vector<double> & ground_truth_pose, const rclcpp::Time & timestamp)
+{
+  static nav_msgs::msg::Path msg;
+  msg.header.stamp = timestamp;
+  msg.header.frame_id = "map";
+
+  geometry_msgs::msg::PoseStamped pose;
+  pose.header = msg.header;
+  pose.pose.position.x = ground_truth_pose[3];
+  pose.pose.position.y = ground_truth_pose[7];
+  pose.pose.position.z = ground_truth_pose[11];
+  tf2::Matrix3x3 rotation_matrix;
+  rotation_matrix.setValue(
+    ground_truth_pose[0],
+    ground_truth_pose[1],
+    ground_truth_pose[2],
+    ground_truth_pose[4],
+    ground_truth_pose[5],
+    ground_truth_pose[6],
+    ground_truth_pose[8],
+    ground_truth_pose[9],
+    ground_truth_pose[10]);
+  tf2::Quaternion quaternion;
+  rotation_matrix.getRotation(quaternion);
+  pose.pose.orientation = tf2::toMsg(quaternion);
+  msg.poses.push_back(pose);
+  return msg;
+}
+

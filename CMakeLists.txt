@@ -18,6 +18,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
 
@@ -39,7 +40,8 @@ ament_target_dependencies(kitti_to_ros2bag_node PUBLIC
   tf2
   tf2_geometry_msgs
   cv_bridge
-  pcl_conversions)
+  pcl_conversions
+  nav_msgs)
 
 target_link_libraries(kitti_to_ros2bag_node PUBLIC
   opencv_imgcodecs

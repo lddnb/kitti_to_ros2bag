@@ -15,7 +15,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <rosbag2_cpp/writer.hpp>
-
+#include <nav_msgs/msg/path.hpp>
 
 namespace fs = std::filesystem;
 
@@ -67,13 +67,18 @@ private:
     const std::string & calib_file, const rclcpp::Time & timestamp,
     const std::string & id, const std::string & frame_id);
 
+  nav_msgs::msg::Path convert_ground_truth_to_path_msg(
+    const std::vector<double> & ground_truth_pose, const rclcpp::Time & timestamp);
+
   size_t index_;
   size_t max_index_;
 
+  bool use_ground_truth_;
   fs::path kitti_path_;
   std::string data_folder_;
   std::string calib_folder_;
   std::vector<std::string> dirs_;
   std::vector<std::vector<std::string>> filenames_;
   std::vector<std::vector<rclcpp::Time>> timestamps_;
+  std::vector<std::vector<double>> ground_truth_poses_;
 };
