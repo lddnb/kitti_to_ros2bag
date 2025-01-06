@@ -16,6 +16,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <tf2/utils.h>
 
 namespace fs = std::filesystem;
 
@@ -41,6 +42,7 @@ private:
 
   void get_filenames();
   void get_all_timestamps();
+  void get_calib_data();
 
   sensor_msgs::msg::Image convert_image_to_msg(
     const fs::path & file_path, const rclcpp::Time & timestamp,
@@ -73,7 +75,6 @@ private:
   size_t index_;
   size_t max_index_;
 
-  bool use_ground_truth_;
   fs::path kitti_path_;
   std::string data_folder_;
   std::string calib_folder_;
@@ -81,4 +82,7 @@ private:
   std::vector<std::vector<std::string>> filenames_;
   std::vector<std::vector<rclcpp::Time>> timestamps_;
   std::vector<std::vector<double>> ground_truth_poses_;
+
+  tf2::Transform velo_to_cam_transform_;
+  tf2::Transform imu_to_velo_transform_;
 };

@@ -31,11 +31,11 @@ Kitti2BagNode::Kitti2BagNode()
   data_folder_ = declare_parameter("data_folder", std::string());
   calib_folder_ = declare_parameter("calib_folder", std::string());
   dirs_ = declare_parameter("dirs", std::vector<std::string>());
-  use_ground_truth_ = declare_parameter("use_ground_truth", false);
   std::string output_bag_name = data_folder_ + "_bag";
 
   get_filenames();
   get_all_timestamps();
+  get_calib_data();
 
   writer_ = std::make_unique<rosbag2_cpp::Writer>();
   writer_->open(output_bag_name);
@@ -50,7 +50,10 @@ void Kitti2BagNode::on_timer_callback()
 
   for (size_t i = 0; i < dirs_.size(); ++i) {
     const std::string & dir = dirs_[i];
-    fs::path filename = kitti_path_ / data_folder_ / dir / "data" / filenames_[i][index_];
+    fs::path filename;
+    if (dir != "ground_truth") {
+      filename = kitti_path_ / data_folder_ / dir / "data" / filenames_[i][index_];
+    }
     rclcpp::Time timestamp = timestamps_[i][index_];
 
     if (dir == "image_00") {
@@ -106,7 +109,7 @@ void Kitti2BagNode::on_timer_callback()
     } else if (dir == "velodyne_points") {
       auto msg = convert_velo_to_msg(filename, timestamp);
       writer_->write(msg, "kitti/velo", timestamp);
-    } else if (use_ground_truth_) {
+    } else if (dir == "ground_truth") {
       auto msg = convert_ground_truth_to_path_msg(ground_truth_poses_[index_], timestamp);
       writer_->write(msg, "kitti/ground_truth", timestamp);
     }
@@ -150,10 +153,35 @@ void Kitti2BagNode::get_filenames()
       rclcpp::shutdown();
     }
     filenames_.push_back(filenames_vec);
+
+    if (dir == "ground_truth") {
+      fs::path ground_truth_file =
+          kitti_path_ / data_folder_ / dir / "data/ground_truth.txt";
+      if (!fs::exists(ground_truth_file)) {
+        RCLCPP_ERROR(get_logger(), "Ground truth file not found");
+        exit(1);
+      }
+      std::ifstream input_file(ground_truth_file);
+      std::string line;
+      while (std::getline(input_file, line)) {
+        std::vector<double> current_pose;
+        std::istringstream iss(line);
+        for (int i = 0; i < 12; ++i) {
+          double value;
+          iss >> value;
+          current_pose.push_back(value);
+        }
+        ground_truth_poses_.push_back(current_pose);
+      }
+      RCLCPP_INFO(get_logger(), "Found %ld ground truth poses.", ground_truth_poses_.size());
+    }
   }
 
   // make sure all folders have the same number of files
   for (size_t i = 0; i < filenames_.size() - 1; ++i) {
+    if (dirs_[i+1] == "ground_truth") {
+      continue;
+    }
     if (filenames_[i].size() != filenames_[i + 1].size()) {
       RCLCPP_ERROR(
         get_logger(),
@@ -163,26 +191,6 @@ void Kitti2BagNode::get_filenames()
     }
   }
   max_index_ = filenames_[0].size();
-
-  if (use_ground_truth_) {
-    fs::path ground_truth_file = kitti_path_ / data_folder_ / "ground_truth.txt";
-    if (!fs::exists(ground_truth_file)) {
-      RCLCPP_ERROR(get_logger(), "Ground truth file not found");
-      return;
-    }
-    std::ifstream input_file(ground_truth_file);
-    std::string line;
-    while (std::getline(input_file, line)) {
-      std::vector<double> current_pose;
-      std::istringstream iss(line);
-      for (int i = 0; i < 12; ++i) {
-        double value;
-        iss >> value;
-        current_pose.push_back(value);
-      }
-      ground_truth_poses_.push_back(current_pose);
-    }
-  }
 }
 
 void Kitti2BagNode::get_all_timestamps()
@@ -228,6 +236,101 @@ void Kitti2BagNode::get_all_timestamps()
     }
     timestamps_.push_back(timestamps_vec);
   }
+}
+
+void Kitti2BagNode::get_calib_data()
+{
+  fs::path calib_velo_to_cam_file = kitti_path_ / calib_folder_ / "calib_velo_to_cam.txt";
+  fs::path calib_imu_to_velo_file = kitti_path_ / calib_folder_ / "calib_imu_to_velo.txt";
+
+  std::ifstream input_file(calib_velo_to_cam_file);
+  if (!input_file.is_open()) {
+    RCLCPP_ERROR(get_logger(), "Could not open calib_velo_to_cam.txt");
+    exit(1);
+  }
+
+  std::string line;
+  std::vector<double> R_vec;
+  std::vector<double> T_vec;
+
+  while (std::getline(input_file, line)) {
+    if (line.find("R:") != std::string::npos) {
+      // 读取R矩阵
+      std::istringstream iss(line.substr(2));  // 跳过"R:"
+      for (int i = 0; i < 9; ++i) {
+        double value;
+        iss >> value;
+        R_vec.push_back(value);
+      }
+    } else if (line.find("T:") != std::string::npos) {
+      // 读取T向量
+      std::istringstream iss(line.substr(2));  // 跳过"T:"
+      for (int i = 0; i < 3; ++i) {
+        double value;
+        iss >> value;
+        T_vec.push_back(value);
+      }
+    }
+  }
+  input_file.close();
+
+  // 转换为tf2格式
+  tf2::Matrix3x3 tf2_R(
+    R_vec[0], R_vec[1], R_vec[2],
+    R_vec[3], R_vec[4], R_vec[5],
+    R_vec[6], R_vec[7], R_vec[8]
+  );
+  tf2::Vector3 tf2_T(T_vec[0], T_vec[1], T_vec[2]);
+
+  // 创建tf2变换
+  tf2::Transform transform;
+  transform.setBasis(tf2_R);
+  transform.setOrigin(tf2_T);
+
+  // 存储变换供后续使用
+  velo_to_cam_transform_ = transform.inverse();
+
+  R_vec.clear();
+  T_vec.clear();
+  input_file.open(calib_imu_to_velo_file);
+  if (!input_file.is_open()) {
+    RCLCPP_ERROR(get_logger(), "Could not open calib_imu_to_velo.txt");
+    exit(1);
+  }
+
+  while (std::getline(input_file, line)) {
+    if (line.find("R:") != std::string::npos) {
+      // 读取R矩阵
+      std::istringstream iss(line.substr(2));  // 跳过"R:"
+      for (int i = 0; i < 9; ++i) {
+        double value;
+        iss >> value;
+        R_vec.push_back(value);
+      }
+    } else if (line.find("T:") != std::string::npos) {
+      // 读取T向量
+      std::istringstream iss(line.substr(2));  // 跳过"T:"
+      for (int i = 0; i < 3; ++i) {
+        double value;
+        iss >> value;
+        T_vec.push_back(value);
+      }
+    }
+  }
+  input_file.close();
+
+  tf2::Matrix3x3 tf2_R_2(
+    R_vec[0], R_vec[1], R_vec[2],
+    R_vec[3], R_vec[4], R_vec[5],
+    R_vec[6], R_vec[7], R_vec[8]
+  );
+  tf2::Vector3 tf2_T_2(T_vec[0], T_vec[1], T_vec[2]);
+
+  tf2::Transform transform_2;
+  transform_2.setBasis(tf2_R_2);
+  transform_2.setOrigin(tf2_T_2);
+
+  imu_to_velo_transform_ = transform_2.inverse();
 }
 
 sensor_msgs::msg::Image Kitti2BagNode::convert_image_to_msg(
@@ -476,9 +579,6 @@ nav_msgs::msg::Path Kitti2BagNode::convert_ground_truth_to_path_msg(
 
   geometry_msgs::msg::PoseStamped pose;
   pose.header = msg.header;
-  pose.pose.position.x = ground_truth_pose[3];
-  pose.pose.position.y = ground_truth_pose[7];
-  pose.pose.position.z = ground_truth_pose[11];
   tf2::Matrix3x3 rotation_matrix;
   rotation_matrix.setValue(
     ground_truth_pose[0],
@@ -490,9 +590,15 @@ nav_msgs::msg::Path Kitti2BagNode::convert_ground_truth_to_path_msg(
     ground_truth_pose[8],
     ground_truth_pose[9],
     ground_truth_pose[10]);
-  tf2::Quaternion quaternion;
-  rotation_matrix.getRotation(quaternion);
-  pose.pose.orientation = tf2::toMsg(quaternion);
+  tf2::Quaternion cam_quaternion;
+  rotation_matrix.getRotation(cam_quaternion);
+  tf2::Quaternion velo_quaternion = imu_to_velo_transform_.getRotation() * (velo_to_cam_transform_.getRotation() * cam_quaternion);
+  tf2::Vector3 cam_position(ground_truth_pose[3], ground_truth_pose[7], ground_truth_pose[11]);
+  tf2::Vector3 velo_position = imu_to_velo_transform_ * (velo_to_cam_transform_ * cam_position);
+  pose.pose.position.x = velo_position.x();
+  pose.pose.position.y = velo_position.y();
+  pose.pose.position.z = velo_position.z();
+  pose.pose.orientation = tf2::toMsg(velo_quaternion);
   msg.poses.push_back(pose);
   return msg;
 }
